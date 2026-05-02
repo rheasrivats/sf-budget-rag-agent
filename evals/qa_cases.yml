@@ -1,0 +1,75 @@
+version: 1
+suite: qa_official_v1_current_db
+default_plan_id: latest
+cases:
+  - id: budget_process_timeline
+    query: "What is the high-level timeline for San Francisco's budget process?"
+    reference_answer: "The process starts in the fall for the fiscal year beginning July 1. Departments get instructions and propose budgets in December, departments send proposals to the Mayor and Board in March, the Mayor proposes a City budget in June, the Board amends and approves it in July, and the Mayor signs it in August."
+    expected_source_kinds: ["official"]
+    expected_citation_urls:
+      - "https://sf.gov/documents/41166/70_CSF_Proposed_Budget_Book_June_2024_Final_REV1_0525v2_UMl4gFg.pdf"
+    relevant_doc_ids: [11]
+    must_not_include: ["generated plan", "our plan", "plan://", "https://sf.gov/topics/budget"]
+    rubric_notes: "Answer should summarize the official budget process timeline chronologically, using the non-HTML official budget book as the expected source."
+
+  - id: march_shortfall_update
+    query: "What two-year shortfall did the March 2025 update project for FY 2025-26 and FY 2026-27, and how did that compare with the December 2024 projection?"
+    reference_answer: "The March 2025 update projected an $817.5 million two-year shortfall, which was $58.5 million less than the $875.9 million shortfall projected in December 2024."
+    expected_source_kinds: ["official"]
+    expected_citation_urls:
+      - "https://media.api.sf.gov/documents/March_Update_FY_25-26_through_FY_29-30_03.31.25_FINAL.pdf"
+    relevant_doc_ids: [9]
+    must_not_include: ["generated plan", "our plan", "plan://"]
+
+  - id: december_five_year_deficit
+    query: "What deficits did the December 2024 Five-Year Financial Plan project for FY 2025-26 and FY 2026-27?"
+    reference_answer: "The December 2024 Five-Year Financial Plan projected a $253.2 million shortfall for FY 2025-26 and a $622.7 million shortfall for FY 2026-27, totaling an $875.9 million two-year deficit."
+    expected_source_kinds: ["official"]
+    expected_citation_urls:
+      - "https://sf.gov/documents/35263/Five_Year_Financial_Plan_FY_25-26_through_FY_29-30_FINAL_0.pdf"
+    relevant_doc_ids: [7]
+    must_not_include: ["generated plan", "our plan", "plan://"]
+
+  - id: mayor_budget_totals
+    query: "What total budget did the Mayor propose for FY 2025-26 and FY 2026-27?"
+    reference_answer: "The Mayor proposed a $15.9 billion budget for FY 2025-26 and a $16.3 billion budget for FY 2026-27."
+    expected_source_kinds: ["official"]
+    expected_citation_urls:
+      - "https://sf.gov/documents/41166/70_CSF_Proposed_Budget_Book_June_2024_Final_REV1_0525v2_UMl4gFg.pdf"
+    relevant_doc_ids: [11]
+    must_not_include: ["generated plan", "our plan", "plan://", "32.223"]
+
+  - id: budget_instructions_reductions
+    query: "What General Fund reduction target did the FY 2025-26 and FY 2026-27 budget instructions give departments?"
+    reference_answer: "The budget instructions directed departments to make ongoing, permanent General Fund spending reductions of 15% beginning in FY 2025-26."
+    expected_source_kinds: ["official"]
+    expected_citation_urls:
+      - "https://sf.gov/documents/34735/Budget_Instructions_for_Fiscal_Years_2025-26_and_2026-27.pdf"
+    relevant_doc_ids: [4]
+    must_not_include: ["generated plan", "our plan", "plan://"]
+
+  - id: balanced_budget_requirement
+    query: "For which upcoming fiscal years was San Francisco required to adopt a balanced budget in the March 2025 update?"
+    reference_answer: "The March 2025 update says the City was required to adopt a balanced budget for the upcoming two fiscal years, FY 2025-26 and FY 2026-27."
+    expected_source_kinds: ["official"]
+    expected_citation_urls:
+      - "https://media.api.sf.gov/documents/March_Update_FY_25-26_through_FY_29-30_03.31.25_FINAL.pdf"
+    relevant_doc_ids: [9]
+    must_not_include: ["generated plan", "our plan", "plan://"]
+
+  - id: mayor_budget_reserves
+    query: "How much did the Mayor's proposed budget set aside in reserves?"
+    reference_answer: "The Mayor's proposed budget set aside $400 million in reserves to prepare for uncertainty and future challenges."
+    expected_source_kinds: ["official"]
+    expected_citation_urls:
+      - "https://sf.gov/documents/41453/FY25-26_and_FY26-27_Revenue_Letter_FINAL.pdf"
+    relevant_doc_ids: [15]
+    must_not_include: ["generated plan", "our plan", "plan://"]
+
+  - id: unknown_future_budget
+    query: "What is San Francisco's approved budget total for FY 2032-33?"
+    reference_answer: "The retrieved evidence does not provide an approved San Francisco budget total for FY 2032-33, so the answer should say that the amount is unavailable from the evidence."
+    expected_source_kinds: ["official"]
+    relevant_doc_ids: []
+    must_not_include: ["generated plan", "our plan", "plan://"]
+    rubric_notes: "Reward a grounded uncertainty answer. Penalize fabricated budget amounts."

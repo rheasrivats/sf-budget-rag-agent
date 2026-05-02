@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SF Budget Research Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>SF Budget Research Agent</h1>
+      <p>Official SF sources, manual refresh, immutable plan versions.</p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Q&A (Budget + Plan)</h2>
+        <p>Single chat over official budget sources and generated plans. Thread remains pinned to selected plan version.</p>
+        <div class="chat-controls">
+          <label><input id="escalate" type="checkbox" /> Force high-reasoning model</label>
+        </div>
+        <textarea id="question" rows="3" placeholder="Ask about the general SF budget, the generated plan, or both..."></textarea>
+        <div class="actions">
+          <button id="ask-btn" disabled>Ask</button>
+        </div>
+        <div class="answer-meta" id="answer-meta"></div>
+        <div id="answer" class="answer-box"></div>
+        <details id="debug-panel" class="debug-panel">
+          <summary>Debug Details</summary>
+          <div id="debug-summary" class="debug-summary"></div>
+          <pre id="debug-output"></pre>
+        </details>
+        <div id="citations"></div>
+      </section>
+
+      <details class="card proposed-plan-panel">
+        <summary>
+          <h2>Proposed Plan Workspace</h2>
+          <span class="beta-badge">Beta</span>
+          <small>Experimental, not yet validated like Q&A</small>
+        </summary>
+
+        <section class="subcard">
+          <h2>Plan Versions</h2>
+          <div id="plan-list"></div>
+        </section>
+
+        <section class="subcard grid-2">
+          <div>
+            <h2>Plan View</h2>
+            <div id="plan-meta"></div>
+            <pre id="plan-memo"></pre>
+            <div class="actions">
+              <button id="download-pdf" disabled>Download Memo PDF</button>
+            </div>
+          </div>
+          <div>
+            <h2>Comparison View</h2>
+            <div id="comparison-summary" class="comparison-summary"></div>
+            <div id="comparison-context" class="comparison-context"></div>
+            <div class="table-wrap">
+              <table id="comparison-table">
+                <thead>
+                  <tr>
+                    <th>Department</th>
+                    <th>Mayor Dir.</th>
+                    <th>Proposed Dir.</th>
+                    <th>Delta</th>
+                    <th>FY26-27 Mayor (USD, auto M/B)</th>
+                    <th>FY26-27 Proposed (USD, auto M/B)</th>
+                    <th>Delta (USD, auto M/B)</th>
+                    <th>Delta %</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="actions">
+              <button id="download-csv" disabled>Download Comparison CSV</button>
+            </div>
+          </div>
+        </section>
+      </details>
+
+      <section class="card control-center">
+        <h2>Control Center</h2>
+        <div id="source-status">Loading source status...</div>
+        <div class="actions">
+          <button id="refresh-btn">Refresh Sources</button>
+          <button id="generate-btn">Generate New Plan</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js?v=20260501-ui-qa-fixes"></script>
+  </body>
+</html>
