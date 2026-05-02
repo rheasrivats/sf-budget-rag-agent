@@ -1,5 +1,7 @@
 # SF Budget Research Agent (v1)
 
+![Q&A preview](docs/assets/qa-preview.png)
+
 Local-first web app that:
 - Discovers official SF budget sources from HTML seed pages and ingests linked PDF/XLSX assets
 - Supports unified Q&A across official budget docs
