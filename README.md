@@ -2,9 +2,11 @@
 
 Local-first web app that:
 - Discovers official SF budget sources from HTML seed pages and ingests linked PDF/XLSX assets
+- Supports unified Q&A across official budget docs
+
+In Progress:
 - Generates an immutable plan version in Lurie-style section format
 - Builds department-level comparisons against mayor proposal signals
-- Supports unified Q&A across official budget docs + generated plan docs, with persistent thread memory
 - Exports memo PDF and comparison CSV
 
 ## Setup
@@ -31,10 +33,10 @@ Open: `http://127.0.0.1:8000`
 ## UX Workflow
 
 1. Click **Refresh Sources** (manual only)
-2. Click **Generate New Plan** (creates immutable version)
-3. Review **Plan View** and **Comparison View**
-4. Ask follow-up questions in **Q&A** (single chat across official + plan evidence; thread pinned to selected plan)
-5. Export with **Download Memo PDF** and **Download Comparison CSV**
+2. Ask questions in **Q&A** over official budget evidence
+3. **(Beta)** Click **Generate New Plan** (creates immutable version)
+4. **(Beta)** Review **Plan View** and **Comparison View**
+5. **(Beta)** Export with **Download Memo PDF** and **Download Comparison CSV**
 
 ## API Endpoints
 
