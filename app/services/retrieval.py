@@ -60,7 +60,9 @@ def _apply_cohere_rerank(query: str, chunks: list[EvidenceChunk], final_k: int) 
         semantic = chunk.score
         relevance = float(result.relevance_score)
         chunk.score = relevance
+        prior_scores = dict(chunk.metadata.get("retrieval_scores") or {})
         chunk.metadata["retrieval_scores"] = {
+            **prior_scores,
             "semantic": round(float(semantic), 6),
             "cohere_relevance": round(relevance, 6),
             "final": round(relevance, 6),
@@ -68,6 +70,10 @@ def _apply_cohere_rerank(query: str, chunks: list[EvidenceChunk], final_k: int) 
         }
         reranked.append(chunk)
     return reranked
+
+
+def rerank_chunks(query: str, chunks: list[EvidenceChunk], final_k: int | None = None) -> list[EvidenceChunk]:
+    return _apply_cohere_rerank(query, chunks, final_k or settings.retriever_k)
 
 
 def retrieve_chunks(
@@ -104,13 +110,22 @@ def retrieve_chunks(
     for chunk in chunks:
         c_vec = np.array(chunk.embedding_json, dtype=np.float32)
         score = _cosine(q_vec, c_vec)
+        metadata = {
+            "url": chunk.source.url,
+            "title": chunk.source.title,
+            "content_type": chunk.source.content_type,
+            "source_kind": chunk.source.source_kind,
+            **dict(chunk.metadata_json),
+        }
+        if not metadata.get("source_kind"):
+            metadata["source_kind"] = chunk.source.source_kind
         scored.append(
             EvidenceChunk(
                 chunk_id=chunk.id,
                 source_id=chunk.source_id,
                 score=score,
                 content=chunk.content,
-                metadata=dict(chunk.metadata_json),
+                metadata=metadata,
             )
         )
 

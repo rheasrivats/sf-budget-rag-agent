@@ -4,6 +4,7 @@ langchain-community
 bs4
 langchain[openai]
 langchain-openai
+langchain-tavily
 cohere
 python-dotenv
 fastapi

@@ -4,7 +4,7 @@
 
 Local-first web app that:
 - Discovers official SF budget sources from HTML seed pages and ingests linked PDF/XLSX assets
-- Supports unified Q&A across official budget docs
+- Supports Q&A across official budget docs, with optional CRAG web supplementation
 
 In Progress:
 - Generates an immutable plan version in Lurie-style section format
@@ -21,7 +21,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set `OPENAI_API_KEY` and `COHERE_API_KEY` in `.env`.
+Set `OPENAI_API_KEY`, `COHERE_API_KEY`, and optionally `TAVILY_API_KEY` in `.env`.
 
 ## Run App
 
@@ -71,15 +71,31 @@ Cohere reranking:
 - Final returned chunks are controlled by `RAG_RETRIEVER_K` (default `8`).
 - Rerank model is controlled by `RAG_RERANK_MODEL` (default `rerank-v4.0-pro`).
 
+CRAG web supplementation:
+- CRAG is controlled by `CRAG_ENABLED` and requires `TAVILY_API_KEY`.
+- The app first retrieves/reranks local chunks. If local confidence is low, or an adequacy check finds the retrieved evidence incomplete, it calls Tavily.
+- Tavily results are temporary per-request `web` evidence chunks; v1 does not cache/index them into SQLite.
+- Local and Tavily chunks are reranked together by Cohere before answer generation.
+- The adequacy check uses the routine Q&A model with trimmed context (`CRAG_ADEQUACY_MAX_CHUNKS`, `CRAG_ADEQUACY_CHUNK_CHARS`) to decide whether local evidence covers every requested fact.
+- Debug traces record CRAG trigger reason, adequacy result, Tavily results, final source mix, and fallback errors.
+
 ## Q&A Evaluation Suite
 
 Local-only evals for the Q&A feature live in `evals/`. The initial suite uses official SF budget sources only; generated plan cases are intentionally excluded from v1. A selected plan is still resolved because the current Q&A service requires one, but every initial case expects `official` retrieval only and forbids `plan://` citations. Gold retrieval/citation labels target chunked non-HTML documents because HTML seed pages are discovery-only.
 
-Run the full suite:
+Run the local official-doc suite:
 
 ```bash
 .venv/bin/python evals/run_qa_eval.py --cases evals/qa_cases.yml
 ```
+
+Run the live CRAG suite, which can call Tavily, Cohere, and OpenAI:
+
+```bash
+.venv/bin/python evals/run_qa_eval.py --cases evals/qa_crag_cases.yml
+```
+
+The CRAG suite includes one forced-trigger canary case and otherwise uses the app's configured CRAG threshold, so trigger failures are surfaced by the `crag_trigger_policy` grader.
 
 Useful options:
 
@@ -108,11 +124,16 @@ Each run writes local artifacts under `eval_results/<run_id>/`:
 - `summary.md`
 - `traces/<case_id>/trial_<n>.json`
 
-Traces include retrieval policy, retrieved chunks, prompt/messages, parsed answer, citations, response blocks, reasoning summaries when provided, tool calls if present, deterministic grader output, and LLM judge scores/rationales. The runner also writes `eval_results/latest_run.txt`.
+Traces include retrieval policy, CRAG trigger details, retrieved chunks, prompt/messages, parsed answer, citations, response blocks, reasoning summaries when provided, tool calls if present, deterministic grader output, LLM judge scores/rationales, and approximate token/cost estimates. The runner also writes `eval_results/latest_run.txt`.
 
 The suite uses deterministic graders plus LLM rubric graders inspired by LangSmith RAG evaluation concepts, but v1 does not publish datasets or experiments to LangSmith.
 
-The deterministic graders focus on retrieval policy, retrieval quality, citations, forbidden generated-plan references, non-empty answers, non-empty retrieval, and scored support for numeric/date claims. The initial suite labels relevant source-document IDs and reports recall@k, precision@k, and MRR. Every citation must point to a document that was actually retrieved. If the answer includes money amounts, percentages, fiscal years, or dates, those claims are canonicalized and scored against claims found in the retrieved context; this numeric/date support grader is non-blocking and acts as a warning. Completeness and wording are handled by the LLM rubric graders rather than brittle required-phrase checks.
+The deterministic graders focus on retrieval policy, retrieval quality, citations, CRAG trigger expectations, forbidden generated-plan references, non-empty answers, non-empty retrieval, and scored support for numeric/date claims. The initial suite labels relevant source-document IDs and reports recall@k, precision@k, and MRR. Every citation must point to a document that was actually retrieved. If the answer includes money amounts, percentages, fiscal years, or dates, those claims are canonicalized and scored against claims found in the retrieved context; this numeric/date support grader is non-blocking and acts as a warning. Completeness and wording are handled by the LLM rubric graders rather than brittle required-phrase checks.
+
+Eval cost estimates:
+- Terminal output and summaries include approximate tokens and cost per trial, per case, and per run.
+- Estimates are directional, based on roughly four characters per token plus configured model price constants.
+- Cost components are broken out for target answer generation, CRAG adequacy checks, and LLM judge calls.
 
 ## Notes
 

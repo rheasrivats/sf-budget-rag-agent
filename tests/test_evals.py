@@ -26,6 +26,19 @@ def test_load_initial_qa_suite():
     assert suite.cases[1].relevant_doc_ids == [9]
 
 
+def test_load_crag_qa_suite():
+    suite = load_suite(Path("evals/qa_crag_cases.yml"))
+    assert suite.suite == "qa_crag_v1_live_web"
+    assert suite.crag_enabled is True
+    assert suite.crag_rerank_threshold is None
+    assert len(suite.cases) == 4
+    assert suite.cases[0].force_crag is True
+    assert suite.cases[0].crag_rerank_threshold is None
+    assert all(case.crag_rerank_threshold is None for case in suite.cases[1:])
+    assert all(case.expect_crag_triggered is True for case in suite.cases)
+    assert all(case.expected_source_kinds == ["official", "web"] for case in suite.cases)
+
+
 def test_deterministic_graders_pass_official_prediction():
     case = QACase(
         id="timeline",
@@ -131,6 +144,50 @@ def test_citation_validity_requires_cited_docs_to_be_retrieved():
     assert grades["citation_validity"].score == 0.0
 
 
+def test_citation_validity_accepts_web_citations_from_retrieved_context():
+    case = QACase(id="x", query="x", reference_answer="x")
+    prediction = {
+        "answer": "x",
+        "citations": [{"url": "https://controller.gov/budget", "source_kind": "web"}],
+        "retrieved_context": [
+            {"source_id": -1, "content": "x", "metadata": {"url": "https://controller.gov/budget", "source_kind": "web"}}
+        ],
+        "debug": {"retrieval_policy": {"allowed_source_kinds": ["official", "web"]}},
+    }
+
+    grades = {grade.name: grade for grade in run_deterministic_graders(case, prediction)}
+    assert grades["citation_validity"].passed
+    assert grades["citation_validity"].score == 1.0
+
+
+def test_crag_trigger_policy_uses_optional_case_expectation():
+    case = QACase(id="x", query="x", reference_answer="x", expect_crag_triggered=True)
+    prediction = {
+        "answer": "x",
+        "citations": [],
+        "retrieved_context": [{"content": "x", "metadata": {"url": "https://sf.gov/x"}}],
+        "debug": {"retrieval_policy": {"allowed_source_kinds": ["official", "web"], "crag_triggered": True}},
+    }
+
+    grades = {grade.name: grade for grade in run_deterministic_graders(case, prediction)}
+    assert grades["crag_trigger_policy"].passed
+    assert grades["crag_trigger_policy"].score == 1.0
+
+
+def test_crag_trigger_policy_fails_on_mismatch():
+    case = QACase(id="x", query="x", reference_answer="x", expect_crag_triggered=True)
+    prediction = {
+        "answer": "x",
+        "citations": [],
+        "retrieved_context": [{"content": "x", "metadata": {"url": "https://sf.gov/x"}}],
+        "debug": {"retrieval_policy": {"allowed_source_kinds": ["official"], "crag_triggered": False}},
+    }
+
+    grades = {grade.name: grade for grade in run_deterministic_graders(case, prediction)}
+    assert not grades["crag_trigger_policy"].passed
+    assert grades["crag_trigger_policy"].score == 0.0
+
+
 def test_citation_url_recall_scores_partial_matches():
     case = QACase(
         id="x",
@@ -232,6 +289,83 @@ def test_parse_args_supports_trials_limit_and_thresholds():
     assert args.limit == 2
     assert args.threshold == 0.8
     assert args.critical_floor == 0.4
+
+
+def test_default_eval_target_forces_crag_off(monkeypatch):
+    import evals.runner as runner
+
+    observed = {}
+
+    def fake_answer_question(*_args, **kwargs):
+        observed.update(kwargs)
+        return {"answer": "x", "model_used": "stub", "citations": [], "retrieved_context": []}
+
+    monkeypatch.setattr(runner, "answer_question", fake_answer_question)
+
+    runner.default_target(
+        None,
+        PlanVersion(id=1, memo_markdown="memo", model_used="test"),
+        "thread",
+        QACase(id="x", query="x", reference_answer="x"),
+        None,
+    )
+
+    assert observed["crag_enabled"] is False
+    assert observed["force_crag"] is False
+
+
+def test_run_qa_eval_applies_suite_crag_defaults(tmp_path, monkeypatch):
+    db_path = tmp_path / "eval.db"
+    _make_db(db_path)
+    cases_path = tmp_path / "cases.yml"
+    cases_path.write_text(
+        """
+version: 1
+suite: crag_default_suite
+default_plan_id: latest
+crag_enabled: true
+crag_rerank_threshold: 1.01
+cases:
+  - id: crag_case
+    query: "What needs web?"
+    reference_answer: "Web"
+    expected_source_kinds: ["official", "web"]
+    expect_crag_triggered: true
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("evals.runner._copy_db_to_temp", lambda: (_NoCleanup(), db_path))
+    observed = {}
+
+    def target_fn(_db, _plan, _thread_id, case, _trace):
+        observed["case_crag_enabled"] = case.crag_enabled
+        observed["case_crag_rerank_threshold"] = case.crag_rerank_threshold
+        return {
+            "answer": "Web",
+            "model_used": "stub",
+            "citations": [{"url": "https://sf.gov/web", "source_kind": "web"}],
+            "retrieved_context": [
+                {"content": "Web", "metadata": {"source_kind": "web", "url": "https://sf.gov/web"}}
+            ],
+            "debug": {"retrieval_policy": {"allowed_source_kinds": ["official", "web"], "crag_triggered": True}},
+        }
+
+    def judge_fn(_case, _prediction, _model_name, _threshold, _trace):
+        return {
+            name: RubricGrade(score=0.9, passed=True, rationale="stub")
+            for name in ("correctness", "answer_relevance", "groundedness", "retrieval_relevance")
+        }
+
+    result = run_qa_eval(
+        cases_path,
+        output_dir=tmp_path / "results",
+        target_fn=target_fn,
+        judge_fn=judge_fn,
+    )
+
+    assert result.suite_passed
+    assert observed == {"case_crag_enabled": True, "case_crag_rerank_threshold": 1.01}
 
 
 def test_rubric_prompt_defines_score_endpoints():
@@ -337,6 +471,10 @@ cases:
     assert result.cases[0].pass_at_k is True
     assert result.cases[0].pass_caret_k is True
     assert result.cases[0].trial_pass_rate == 1.0
+    assert result.cost_estimate is not None
+    assert result.cost_estimate.total_tokens > 0
+    assert result.cases[0].cost_estimate is not None
+    assert result.cases[0].trials[0].cost_estimate is not None
     run_dir = tmp_path / "results" / result.run_id
     assert (run_dir / "summary.json").exists()
     assert (run_dir / "summary.md").exists()
@@ -344,6 +482,7 @@ cases:
     assert (tmp_path / "results" / "latest_run.txt").read_text(encoding="utf-8").strip() == result.run_id
     trace = json.loads((run_dir / "traces" / "stub_case" / "trial_1.json").read_text(encoding="utf-8"))
     assert trace["deterministic_grades"][0]["description"]
+    assert trace["cost_estimate"]["total_tokens"] > 0
 
 
 def test_run_qa_eval_reports_progress(tmp_path, monkeypatch):
@@ -398,10 +537,12 @@ cases:
     assert "Total trials: 1" in output
     assert "[1/1] progress_case" in output
     assert "trial 1: PASS" in output
+    assert "cost≈$" in output
     assert "citation_urls=" in output
     assert "recall=" in output
     assert "Suite result: PASS" in output
     assert "Multi-trial stats: pass@1=100.00% pass^1=100.00% trial_pass_rate=100.00%" in output
+    assert "Estimated usage: tokens≈" in output
 
 
 def test_non_blocking_numeric_date_failure_does_not_fail_trial_or_case(tmp_path, monkeypatch):

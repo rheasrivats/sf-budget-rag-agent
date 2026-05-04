@@ -1,0 +1,43 @@
+version: 1
+suite: qa_crag_v1_live_web
+default_plan_id: latest
+crag_enabled: true
+# crag_rerank_threshold controls the local Cohere relevance score below which
+# Tavily is used. Cases without an override use the app default threshold.
+cases:
+  - id: current_sf_minimum_wage
+    query: "What is San Francisco's current minimum wage, and what poster period does the current rate apply to?"
+    reference_answer: "San Francisco's current minimum wage is $19.18 per hour. The current minimum wage poster is effective July 1, 2025 through June 30, 2026."
+    expected_source_kinds: ["official", "web"]
+    relevant_doc_ids: []
+    force_crag: true
+    expect_crag_triggered: true
+    must_not_include: ["generated plan", "our plan", "plan://"]
+    rubric_notes: "This case should use live official SF web evidence, not generated-plan evidence. Reward answers that cite the SF.gov Minimum Wage Ordinance page and include both the $19.18 rate and the July 1, 2025 to June 30, 2026 poster period."
+
+  - id: minimum_compensation_rates_2025
+    query: "Under San Francisco's Minimum Compensation Ordinance, what are the for-profit, non-profit, and public entity rates effective July 1, 2025, and what changes on January 1, 2026?"
+    reference_answer: "Effective July 1, 2025, the MCO rates are $21.54 per hour for for-profit employers, $21.55 per hour for non-profits, and $22.50 per hour for public entities. On January 1, 2026, the non-profit and public entity rates increase to $23.00 per hour; the official FY 2025-26 MCO poster does not list a separate January 1, 2026 for-profit rate change."
+    expected_source_kinds: ["official", "web"]
+    relevant_doc_ids: []
+    expect_crag_triggered: true
+    must_not_include: ["generated plan", "our plan", "plan://"]
+    rubric_notes: "This case should use live official SF web evidence. Reward exact July 1, 2025 rates, the January 1, 2026 increase to $23.00 for non-profit and public entity rates, and a clear statement that no separate January 1, 2026 for-profit rate change is listed in the official FY 2025-26 MCO poster. Do not penalize the answer for not inventing a January 1, 2026 for-profit rate."
+
+  - id: health_care_accountability_fee_2025
+    query: "Under San Francisco's Health Care Accountability Ordinance, what fee rate applies effective July 1, 2025, and what weekly cap is listed?"
+    reference_answer: "Effective July 1, 2025, covered employers who make payments to satisfy the HCAO must pay $7.50 per hour, capped at $300.00 per work week."
+    expected_source_kinds: ["official", "web"]
+    relevant_doc_ids: []
+    expect_crag_triggered: true
+    must_not_include: ["generated plan", "our plan", "plan://"]
+    rubric_notes: "This case should use live official SF web evidence. Reward answers that cite the SF.gov Health Care Accountability Ordinance page and include the $7.50 hourly fee and $300 weekly cap."
+
+  - id: stabilization_reserve_limit
+    query: "According to San Francisco's Stabilization Reserves data page, what share of General Fund revenue can the City Charter allocate to Economic Stabilization or combined Rainy Day and Budget Stabilization reserves?"
+    reference_answer: "The SF.gov Stabilization Reserves data page says the City Charter allows up to 10% of General Fund revenue to be allocated to Economic Stabilization Reserves, or combined Rainy Day and Budget Stabilization Reserves."
+    expected_source_kinds: ["official", "web"]
+    relevant_doc_ids: []
+    expect_crag_triggered: true
+    must_not_include: ["generated plan", "our plan", "plan://"]
+    rubric_notes: "This case should use live official SF web evidence. Reward the 10% General Fund revenue limit and avoid unsupported reserve amounts."

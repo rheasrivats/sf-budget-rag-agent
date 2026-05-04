@@ -25,6 +25,10 @@ class QACase(BaseModel):
     must_not_match: list[str] = Field(default_factory=list)
     check_numeric_date_claims: bool = True
     allow_empty_retrieval: bool = False
+    crag_enabled: bool | None = None
+    force_crag: bool | None = None
+    crag_rerank_threshold: float | None = None
+    expect_crag_triggered: bool | None = None
     rubric_notes: str = ""
 
 
@@ -32,6 +36,8 @@ class QASuite(BaseModel):
     version: int
     suite: str
     default_plan_id: int | str = "latest"
+    crag_enabled: bool = False
+    crag_rerank_threshold: float | None = None
     cases: list[QACase]
 
 
@@ -52,6 +58,15 @@ class RubricGrade(BaseModel):
     rationale: str
 
 
+class CostEstimate(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    by_component: dict[str, Any] = Field(default_factory=dict)
+    note: str = ""
+
+
 class CaseTrialResult(BaseModel):
     case_id: str
     trial: int
@@ -61,6 +76,7 @@ class CaseTrialResult(BaseModel):
     citations: list[dict[str, Any]]
     deterministic_grades: list[DeterministicGrade]
     rubric_grades: dict[str, RubricGrade]
+    cost_estimate: CostEstimate | None = None
     trace_path: str | None = None
     error: str | None = None
 
@@ -74,6 +90,7 @@ class CaseAggregateResult(BaseModel):
     trial_pass_rate: float
     deterministic_passed: bool
     rubric_summary: dict[str, dict[str, float | bool]]
+    cost_estimate: CostEstimate | None = None
     failures: list[str] = Field(default_factory=list)
 
 
@@ -92,5 +109,6 @@ class EvalRunResult(BaseModel):
     pass_caret_k: float
     trial_pass_rate: float
     rubric_means: dict[str, float]
+    cost_estimate: CostEstimate | None = None
     failures: list[dict[str, str]]
     cases: list[CaseAggregateResult]

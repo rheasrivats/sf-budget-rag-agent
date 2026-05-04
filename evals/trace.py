@@ -5,13 +5,17 @@ from datetime import datetime
 from typing import Any
 
 SECRET_KEYS = ("api_key", "apikey", "authorization", "token", "secret", "password")
+SAFE_TOKEN_COUNT_KEYS = {"input_tokens", "output_tokens", "total_tokens"}
 
 
 def redact_secrets(value: Any) -> Any:
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():
-            if any(secret in str(key).lower() for secret in SECRET_KEYS):
+            key_lower = str(key).lower()
+            if key_lower in SAFE_TOKEN_COUNT_KEYS:
+                out[key] = redact_secrets(item)
+            elif any(secret in key_lower for secret in SECRET_KEYS):
                 out[key] = "[REDACTED]"
             else:
                 out[key] = redact_secrets(item)

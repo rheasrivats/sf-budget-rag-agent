@@ -19,6 +19,7 @@ from app.db import Base
 from app.models import PlanVersion
 from app.services.chat import answer_question
 from evals.cases import load_suite
+from evals.costs import estimate_trial_cost, sum_cost_estimates
 from evals.graders import run_deterministic_graders
 from evals.judges import RUBRIC_NAMES, grade_with_llm
 from evals.trace import TraceCollector, redact_secrets
@@ -91,6 +92,9 @@ def default_target(db: Session, plan: PlanVersion, thread_id: str, case: QACase,
         escalate=case.escalate,
         include_retrieved_context=True,
         trace_collector=trace,
+        crag_enabled=bool(case.crag_enabled),
+        force_crag=bool(case.force_crag),
+        crag_rerank_threshold=case.crag_rerank_threshold,
     )
 
 
@@ -149,6 +153,9 @@ def _aggregate_case(
     pass_caret_k = trial_count > 0 and passed_trial_count == trial_count
     trial_pass_rate = passed_trial_count / trial_count if trial_count else 0.0
     passed = deterministic_passed and all(bool(item["passed"]) for item in rubric_summary.values())
+    cost_estimate = sum_cost_estimates(
+        [trial.cost_estimate for trial in trials if trial.cost_estimate is not None]
+    )
     return CaseAggregateResult(
         case_id=case_id,
         passed=passed,
@@ -158,6 +165,7 @@ def _aggregate_case(
         trial_pass_rate=round(trial_pass_rate, 4),
         deterministic_passed=deterministic_passed,
         rubric_summary=rubric_summary,
+        cost_estimate=cost_estimate,
         failures=failures,
     )
 
@@ -192,6 +200,9 @@ def _aggregate_run(
     total_trials = sum(len(case.trials) for case in cases)
     passed_trials = sum(1 for case in cases for trial in case.trials if trial.passed)
     suite_passed = not failures
+    cost_estimate = sum_cost_estimates(
+        [case.cost_estimate for case in cases if case.cost_estimate is not None]
+    )
     return EvalRunResult(
         suite=suite_name,
         run_id=run_id,
@@ -207,6 +218,7 @@ def _aggregate_run(
         pass_caret_k=round(sum(1 for case in cases if case.pass_caret_k) / total_cases, 4) if total_cases else 0.0,
         trial_pass_rate=round(passed_trials / total_trials, 4) if total_trials else 0.0,
         rubric_means=rubric_means,
+        cost_estimate=cost_estimate,
         failures=failures,
         cases=cases,
     )
@@ -231,6 +243,8 @@ def _write_markdown(path: Path, result: EvalRunResult) -> None:
         f"- pass@{result.trials}: `{result.pass_at_k}`",
         f"- pass^{result.trials}: `{result.pass_caret_k}`",
         f"- Trial pass rate: `{result.trial_pass_rate}`",
+        f"- Estimated tokens: `{result.cost_estimate.total_tokens if result.cost_estimate else 0}`",
+        f"- Estimated cost: `${result.cost_estimate.estimated_cost_usd if result.cost_estimate else 0.0:.6f}`",
         "",
         "## Rubric Means",
         "",
@@ -242,7 +256,8 @@ def _write_markdown(path: Path, result: EvalRunResult) -> None:
         lines.append(
             f"- `{case.case_id}`: `{'pass' if case.passed else 'fail'}` "
             f"(pass@{result.trials}=`{case.pass_at_k}`, pass^{result.trials}=`{case.pass_caret_k}`, "
-            f"trial_pass_rate=`{case.trial_pass_rate}`)"
+            f"trial_pass_rate=`{case.trial_pass_rate}`, "
+            f"est_cost=`${case.cost_estimate.estimated_cost_usd if case.cost_estimate else 0.0:.6f}`)"
         )
         for failure in case.failures[:5]:
             lines.append(f"  - {failure}")
@@ -286,6 +301,12 @@ def _report_trial_result(report: ReporterFn | None, trial_result: CaseTrialResul
             rubric_bits.append(f"{name}=missing")
         else:
             rubric_bits.append(f"{name}={grade.score:.2f}/{_format_bool(grade.passed)}")
+    cost = trial_result.cost_estimate
+    cost_bit = (
+        f" cost≈${cost.estimated_cost_usd:.4f} tokens≈{cost.total_tokens}"
+        if cost is not None
+        else ""
+    )
     report(
         "    "
         f"trial {trial_result.trial}: {_format_bool(trial_result.passed)} "
@@ -293,6 +314,7 @@ def _report_trial_result(report: ReporterFn | None, trial_result: CaseTrialResul
         + " ".join(retrieval_bits)
         + (" " if retrieval_bits else "")
         + " ".join(rubric_bits)
+        + cost_bit
     )
 
 
@@ -302,7 +324,8 @@ def _report_case_result(report: ReporterFn | None, case_result: CaseAggregateRes
     stats = (
         f"pass@{len(case_result.trials)}={_format_bool(case_result.pass_at_k)} "
         f"pass^{len(case_result.trials)}={_format_bool(case_result.pass_caret_k)} "
-        f"trial_pass_rate={case_result.trial_pass_rate:.2f}"
+        f"trial_pass_rate={case_result.trial_pass_rate:.2f} "
+        f"cost≈${case_result.cost_estimate.estimated_cost_usd if case_result.cost_estimate else 0.0:.4f}"
     )
     if case_result.passed:
         report(f"  case result: PASS {stats}")
@@ -331,7 +354,20 @@ def run_qa_eval(
         raise ValueError("--limit must be >= 1 when provided")
 
     suite = load_suite(cases_path)
-    selected_cases = suite.cases[:limit] if limit is not None else suite.cases
+    cases_with_suite_defaults = [
+        case.model_copy(
+            update={
+                "crag_enabled": suite.crag_enabled if case.crag_enabled is None else case.crag_enabled,
+                "crag_rerank_threshold": (
+                    suite.crag_rerank_threshold
+                    if case.crag_rerank_threshold is None
+                    else case.crag_rerank_threshold
+                ),
+            }
+        )
+        for case in suite.cases
+    ]
+    selected_cases = cases_with_suite_defaults[:limit] if limit is not None else cases_with_suite_defaults
     run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     run_dir = output_dir / run_id
     total_trials = len(selected_cases) * trials
@@ -374,6 +410,13 @@ def run_qa_eval(
                         deterministic = run_deterministic_graders(case, prediction)
                         trace.record("deterministic_grades", [g.model_dump(mode="json") for g in deterministic])
                         rubric = judge_fn(case, prediction, judge_model, threshold, trace)
+                        cost_estimate = estimate_trial_cost(
+                            case=case,
+                            prediction=prediction,
+                            judge_model=judge_model,
+                            trace_data=trace.to_dict(),
+                        )
+                        trace.record("cost_estimate", cost_estimate.model_dump(mode="json"))
                         trace.record("elapsed_ms", round((perf_counter() - started) * 1000, 3))
                         trial_passed = _blocking_deterministic_passed(deterministic) and all(
                             g.passed for g in rubric.values()
@@ -387,6 +430,7 @@ def run_qa_eval(
                             citations=prediction.get("citations", []),
                             deterministic_grades=deterministic,
                             rubric_grades=rubric,
+                            cost_estimate=cost_estimate,
                             trace_path=str(trace_path),
                         )
                         db.commit()
@@ -446,6 +490,12 @@ def run_qa_eval(
             f"pass^{result.trials}={result.pass_caret_k:.2%} "
             f"trial_pass_rate={result.trial_pass_rate:.2%}"
         )
+        if result.cost_estimate is not None:
+            report(
+                f"Estimated usage: tokens≈{result.cost_estimate.total_tokens} "
+                f"(input≈{result.cost_estimate.input_tokens}, output≈{result.cost_estimate.output_tokens}) "
+                f"cost≈${result.cost_estimate.estimated_cost_usd:.4f}"
+            )
         rubric_summary = " ".join(f"{name}={score:.2f}" for name, score in result.rubric_means.items())
         report(f"Rubric means: {rubric_summary}")
         report(f"Results: {run_dir}")

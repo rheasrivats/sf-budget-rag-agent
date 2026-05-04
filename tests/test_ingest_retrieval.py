@@ -121,6 +121,47 @@ def test_retrieve_chunks_ignores_inactive_sources(monkeypatch):
     engine.dispose()
 
 
+def test_retrieve_chunks_falls_back_to_source_kind_from_source_row(monkeypatch):
+    engine, Local = _make_local_db()
+
+    class _Embeddings:
+        def embed_query(self, _query):
+            return [1.0]
+
+    import app.services.retrieval as retrieval
+
+    monkeypatch.setattr(retrieval, "create_embeddings", lambda model: _Embeddings())
+    monkeypatch.setattr(retrieval, "_apply_cohere_rerank", lambda _query, chunks, final_k: chunks[:final_k])
+
+    with Local() as db:
+        source = SourceDocument(
+            url="https://sf.gov/documents/budget.pdf",
+            title="Budget PDF",
+            content_type="pdf",
+            source_kind="official",
+            active=True,
+        )
+        db.add(source)
+        db.flush()
+        db.add(
+            DocumentChunk(
+                source_id=source.id,
+                chunk_index=0,
+                content="budget",
+                embedding_json=[1.0],
+                metadata_json={"url": source.url},
+            )
+        )
+        db.commit()
+
+        chunks = retrieve_chunks(db, "budget", k=1, source_kinds=["official"])
+
+        assert chunks[0].metadata["source_kind"] == "official"
+        assert chunks[0].metadata["title"] == "Budget PDF"
+
+    engine.dispose()
+
+
 def test_retrieve_chunks_sends_top_8_candidates_to_reranker_and_returns_top_8(monkeypatch):
     engine, Local = _make_local_db()
 

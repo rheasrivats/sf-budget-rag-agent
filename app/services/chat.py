@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import ChatMessage, ChatThread, ComparisonRow, PlanVersion
+from app.services.adequacy import judge_evidence_adequacy
 from app.services.ingest import index_text_document
 from app.services.llm import qa_model, should_escalate
-from app.services.retrieval import render_evidence_context, retrieve_chunks
+from app.services.retrieval import render_evidence_context, rerank_chunks, retrieve_chunks
+from app.services.web_search import tavily_search, web_results_to_chunks
 
 MAX_HISTORY_MESSAGES = 12
 
@@ -259,6 +261,25 @@ def _citations_from_chunks(chunks) -> list[dict[str, Any]]:
     return citations
 
 
+def _top_relevance_score(chunks) -> float:
+    if not chunks:
+        return 0.0
+    scores = chunks[0].metadata.get("retrieval_scores") or {}
+    value = scores.get("cohere_relevance", chunks[0].score)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _source_mix(chunks) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        source_kind = str(chunk.metadata.get("source_kind") or "unknown")
+        counts[source_kind] = counts.get(source_kind, 0) + 1
+    return counts
+
+
 def answer_question(
     db: Session,
     *,
@@ -268,6 +289,9 @@ def answer_question(
     escalate: bool = False,
     include_retrieved_context: bool = False,
     trace_collector=None,
+    crag_enabled: bool | None = None,
+    force_crag: bool = False,
+    crag_rerank_threshold: float | None = None,
 ) -> dict[str, Any]:
     target_started = perf_counter()
     _load_or_create_thread(db, plan.id, thread_id)
@@ -278,7 +302,67 @@ def answer_question(
     retrieval_started = perf_counter()
     evidence_chunks = retrieve_chunks(db, query, source_kinds=source_kinds)
     retrieval_elapsed_ms = round((perf_counter() - retrieval_started) * 1000, 3)
+    local_top_score = _top_relevance_score(evidence_chunks)
+    crag_effective_enabled = (settings.crag_enabled if crag_enabled is None else crag_enabled) and bool(
+        settings.tavily_api_key
+    )
+    crag_threshold = settings.crag_rerank_threshold if crag_rerank_threshold is None else crag_rerank_threshold
+    crag_triggered = False
+    crag_trigger_reason = None
+    crag_fallback_error = None
+    adequacy_check_ran = False
+    adequacy_result = None
+    adequacy_error = None
+    tavily_results_payload: list[dict[str, Any]] = []
+    tavily_result_count = 0
+
+    score_triggered = local_top_score < crag_threshold
+    if crag_effective_enabled and not force_crag and not score_triggered and settings.crag_adequacy_check_enabled:
+        adequacy_check_ran = True
+        try:
+            adequacy = judge_evidence_adequacy(query, evidence_chunks)
+            adequacy_result = adequacy.model_dump(mode="json")
+        except Exception as exc:
+            adequacy_error = str(exc)
+
+    adequacy_triggered = bool(adequacy_result and adequacy_result.get("should_search_web"))
+    if force_crag:
+        crag_trigger_reason = "forced"
+    elif score_triggered:
+        crag_trigger_reason = "low_local_score"
+    elif adequacy_triggered:
+        crag_trigger_reason = "inadequate_local_evidence"
+
+    if crag_effective_enabled and crag_trigger_reason:
+        crag_triggered = True
+        try:
+            tavily_results = tavily_search(
+                query,
+                max_results=settings.crag_tavily_max_results,
+                allowed_domains=settings.crag_allowed_domains,
+            )
+            tavily_results_payload = [
+                {
+                    "title": result.title,
+                    "url": result.url,
+                    "score": result.score,
+                    "content_excerpt": result.content[:1200],
+                }
+                for result in tavily_results
+            ]
+            tavily_result_count = len(tavily_results)
+            web_chunks = web_results_to_chunks(tavily_results)
+            if web_chunks:
+                evidence_chunks = rerank_chunks(query, evidence_chunks + web_chunks, final_k=settings.retriever_k)
+            else:
+                crag_fallback_error = "Tavily returned no usable results."
+        except Exception as exc:
+            crag_fallback_error = str(exc)
+
     evidence_context = render_evidence_context(evidence_chunks)
+    answer_source_kinds = list(source_kinds)
+    if any(chunk.metadata.get("source_kind") == "web" for chunk in evidence_chunks) and "web" not in answer_source_kinds:
+        answer_source_kinds.append("web")
     score_preview = [
         {
             "chunk_id": chunk.chunk_id,
@@ -290,11 +374,27 @@ def answer_question(
     ]
     retrieval_policy = {
         "include_plan_sources": include_plan_sources,
-        "allowed_source_kinds": source_kinds,
+        "allowed_source_kinds": answer_source_kinds,
+        "local_source_kinds": source_kinds,
         "reranker": "cohere",
         "rerank_model": settings.rerank_model,
         "rerank_candidate_pool": settings.rerank_candidate_pool,
         "final_k": settings.retriever_k,
+        "crag_enabled": crag_effective_enabled,
+        "crag_triggered": crag_triggered,
+        "crag_threshold": crag_threshold,
+        "force_crag": force_crag,
+        "crag_trigger_reason": crag_trigger_reason,
+        "local_top_score": local_top_score,
+        "adequacy_check_enabled": settings.crag_adequacy_check_enabled,
+        "adequacy_check_ran": adequacy_check_ran,
+        "adequacy_result": adequacy_result,
+        "adequacy_error": adequacy_error,
+        "tavily_result_count": tavily_result_count,
+        "allowed_web_domains": list(settings.crag_allowed_domains),
+        "crag_fallback_error": crag_fallback_error,
+        "final_source_mix": _source_mix(evidence_chunks),
+        "tavily_results": tavily_results_payload,
         "score_preview": score_preview,
     }
 
@@ -313,7 +413,8 @@ def answer_question(
             content=(
                 "Retrieval policy:\n"
                 f"- include_plan_sources={include_plan_sources}\n"
-                f"- allowed_source_kinds={source_kinds}\n"
+                f"- allowed_source_kinds={answer_source_kinds}\n"
+                f"- crag_triggered={crag_triggered}\n"
                 "Do not use generated-plan claims unless plan sources were included."
             )
         ),
@@ -360,7 +461,7 @@ def answer_question(
                 "citations": citations,
                 "model_escalated": should_promote,
                 "include_plan_sources": include_plan_sources,
-                "allowed_source_kinds": source_kinds,
+                "allowed_source_kinds": answer_source_kinds,
                 "debug": debug_payload,
             },
         )
@@ -392,6 +493,25 @@ def answer_question(
                 "policy": retrieval_policy,
                 "elapsed_ms": retrieval_elapsed_ms,
                 "chunks": _chunks_for_trace(evidence_chunks),
+            },
+        )
+        trace_collector.record(
+            "crag",
+            {
+                "enabled": crag_effective_enabled,
+                "triggered": crag_triggered,
+                "threshold": crag_threshold,
+                "forced": force_crag,
+                "trigger_reason": crag_trigger_reason,
+                "local_top_score": local_top_score,
+                "adequacy_check_ran": adequacy_check_ran,
+                "adequacy_result": adequacy_result,
+                "adequacy_error": adequacy_error,
+                "tavily_result_count": tavily_result_count,
+                "allowed_web_domains": list(settings.crag_allowed_domains),
+                "fallback_error": crag_fallback_error,
+                "final_source_mix": _source_mix(evidence_chunks),
+                "tavily_results": tavily_results_payload,
             },
         )
         trace_collector.record("messages", _messages_for_trace(messages))

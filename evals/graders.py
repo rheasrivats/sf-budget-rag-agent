@@ -39,6 +39,7 @@ GRADER_DESCRIPTIONS = {
     "must_not_match": "Checks that forbidden regex patterns are absent from the answer.",
     "numeric_date_claims_supported": "Warns whether numeric/date claims in the answer appear in retrieved context.",
     "retrieval_nonempty": "Checks that the agent returned retrieved context unless the case permits empty retrieval.",
+    "crag_trigger_policy": "Checks whether CRAG web supplementation triggered when the case expected it.",
 }
 NON_BLOCKING_GRADERS = {"numeric_date_claims_supported"}
 
@@ -555,6 +556,41 @@ def grade_retrieval_nonempty(case: QACase, prediction: dict[str, Any]) -> Determ
     )
 
 
+def grade_crag_trigger_policy(case: QACase, prediction: dict[str, Any]) -> DeterministicGrade:
+    """Grade whether CRAG triggered according to case expectations.
+
+    Inputs:
+    - `case.expect_crag_triggered` optionally sets the expected CRAG trigger state.
+    - `prediction["debug"]["retrieval_policy"]["crag_triggered"]` is the target's observed state.
+
+    Output:
+    - If the case expectation is unset, this grader is informational and passes with score `None`.
+    - Otherwise, passes with score 1.0 when observed trigger state equals the expectation.
+    - `expected` and `observed` record the expected and actual booleans.
+    """
+    policy = (prediction.get("debug") or {}).get("retrieval_policy") or {}
+    observed = bool(policy.get("crag_triggered", False))
+    if case.expect_crag_triggered is None:
+        return _grade(
+            name="crag_trigger_policy",
+            passed=True,
+            score=None,
+            explanation="No CRAG trigger expectation configured.",
+            expected=None,
+            observed=observed,
+        )
+    expected = bool(case.expect_crag_triggered)
+    passed = observed == expected
+    return _grade(
+        name="crag_trigger_policy",
+        passed=passed,
+        score=1.0 if passed else 0.0,
+        explanation=f"CRAG triggered={observed}.",
+        expected=expected,
+        observed=observed,
+    )
+
+
 DETERMINISTIC_GRADERS = [
     grade_answer_nonempty,
     grade_source_kind_policy,
@@ -569,6 +605,7 @@ DETERMINISTIC_GRADERS = [
     grade_must_not_match,
     grade_numeric_date_claims_supported,
     grade_retrieval_nonempty,
+    grade_crag_trigger_policy,
 ]
 
 
